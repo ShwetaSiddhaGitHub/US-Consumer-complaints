@@ -1,0 +1,823 @@
+---
+title: "US Consumer Finance Complaints"
+author: "Shweta Siddha"
+date: "April 18, 2019"
+output:
+  html_document:
+    df_print: paged
+  pdf_document: default
+  word_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+#Good way to check for missing packages and install them
+list.of.packages <- c("mlbench", "MASS","pROC","RSQLite","dplyr","ggplot2","lubridate","tidyverse","tm","SnowballC","wordcloud","RColorBrewer")
+new.packages <- list.of.packages[!(list.of.packages %in% installed.packages()[,"Package"])]
+if(length(new.packages)) install.packages(new.packages)
+
+```
+
+## TABLE OF CONTENTS
+1.  Introduction
+2.  Data Description
+3.  Data Preprocessing
+4.  Exploratory Data Analysis
+
+    4.1 Customer Segmentation 
+    
+    4.2 Product Segmentation 
+    
+    4.3 Seasonality Analysis
+    
+5.  Machine Learning model
+
+    5.1 Using Text Analytics
+    
+        A) Building features from issue text
+        
+        B) Building Machine Learning model using Logistic Regression
+        
+        C) Model Evaluation
+        
+    5.2 Building model using available Categorical data
+    
+        A) Dummy variable creation
+        
+        B) Building Machine Learning model using Logistic Regression
+        
+        C) Model Evaluation
+        
+6. Executive Summary
+
+## 1. INTRODUCTION
+
+CFPB (Consumer Financial Protection Bureau) is a government body which collect consumers' complaints with respect to financial products and services. The accumulated complaints are sent to the respective financial firms for their response. By doing this, they aim to improve the financial marketplace by providing a platform to consumer's problems with financial institutions; and hope to improve the market for both consumers and firms by generating substantial data for analysis.
+
+Analyzing this dataset can provide below benefits:
+
+######From Banks perspective:
+   1.	Help understand the bank challenges in terms of problematic and non-problematic customers.
+   2.	Devising business plans and resources to cater to specific products and issues.
+   3.	Decrease the customer churn by treating this data as a feedback mechanism.
+   4.	Increase their customer base by building up on their products and by providing better resolution to customers.
+
+######From customer perspective:
+   1.	A platform to highlight their issues regarding financial products and services.
+   2.	Can confide trust in a government body to act as an intermediator between them and firms.
+
+######From Economic perspective:
+   1.	Most GDP are concerned with customer finding trust in financial institutions and invest their money.
+   2.	Both the informed population and firms can help increase economic reforms.
+
+
+## 2. DATA DESCRIPTION
+
+The customer complaint dataset contains 555957 records with 18 variables.
+
+It consists of data corresponding to 3605 companies with 11 unique products: Mortgage, Credit reporting, Student loan, Debt collection, Credit card, Bank account or service, Consumer Loan, Money transfers, Payday loan, Prepaid card and Other financial service.
+
+These products are further subdivided into 95 issues and 50 states.
+
+The data is collected from year 2011 till 2016.
+
+```{r echo=FALSE, message=FALSE, warning=FALSE, results='hide'}
+#Reading the data
+con_cmpt <- read.csv("consumer_complaints.csv")
+nrow(con_cmpt)
+
+#Number of unique companies
+length(unique(con_cmpt[["company"]])) 
+
+
+#Number of unique products
+print("Unique products:" )
+length(unique(con_cmpt[["product"]]))
+unique(con_cmpt[["product"]])
+
+#Number of distinct issues
+
+print("Unique issues:" )
+length(unique(con_cmpt[["issue"]]))
+
+```
+## 3. DATA PREPROCESSING
+#####1. Dropping unrequired columns to focus on important column for experimentation.
+    There are many subcategories of the data which has lot of null data and does not help much in analysis. So, dropping all the unrequired columns.
+#####2. Missing value checks.
+    State variable has 4887 null values, for preparation of model will drop the records with NULL values, as that is not even 1% drop in the overall data. 
+#####3. Outlier analyis:
+    Overall, we have 6 years data starting 2011 to 2016, but the record count for 2011 is only 2549 records which is just 0.4 percent of the overall data. So for analysis I am not considering the records.
+#####4. Formatting date column: preparing year, month, day-of-week column.
+#####5. Reducing categories for model building
+    To consider columns like product, reduced the product categories from 11 to 8 for model building. Did similar for other categorical columns.
+
+```{r }
+#Formatting column names
+con_cmpt$consumer_disputed <- con_cmpt$consumer_disputed.
+
+#con_cmpt <- subset(con_cmpt, con_cmpt$product=="Credit card")
+
+vars_obs <- c("date_received", #1
+              "product", #2
+              "issue", #3
+              "company", #4
+              "state", #5
+              "submitted_via",
+              "date_sent_to_company",
+              "company_response_to_consumer",
+              "timely_response",
+              "consumer_disputed",
+              "consumer_complaint_narrative"
+)
+con_cmpt <- con_cmpt[vars_obs]
+
+#Formatting date variables
+con_cmpt$date_received <- as.Date(con_cmpt$date_received, "%m/%d/%Y")
+con_cmpt$Complaint.Date <- as.Date(con_cmpt$date_received)
+con_cmpt$Complaint.Year <- format(con_cmpt$Complaint.Date,"%Y")
+#head(con_cmpt)
+con_cmpt$Complaint.Year <- as.integer(con_cmpt$Complaint.Year)
+con_cmpt$Complaint.Month <- format(con_cmpt$Complaint.Date,"%b")
+con_cmpt$Complaint.Month <- factor(con_cmpt$Complaint.Month, 
+                                   levels = c("Jan", "Feb", "Mar", 
+                                              "Apr", "May", "Jun",
+                                              "Jul", "Aug", "Sep",
+                                              "Oct", "Nov", "Dec"))
+con_cmpt$Complaint.Weekday <- format(con_cmpt$Complaint.Date,"%a")
+con_cmpt$Complaint.Weekday <- factor(con_cmpt$Complaint.Weekday, 
+                                     levels = c("Mon", "Tue", "Wed", 
+                                                "Thu", "Fri", "Sat", "Sun"))
+
+con_cmpt$date_sent_to_company <- as.Date(con_cmpt$date_sent_to_company, "%m/%d/%Y")
+
+#Missing value analysis
+Year_1 <- table(con_cmpt$Complaint.Year)
+Product_1 <- table(con_cmpt$product)
+issue_1 <- table(con_cmpt$issue)
+company_1 <- table(con_cmpt$company)
+state_1 <- table(con_cmpt$state)
+submitted_via_1 <- table(con_cmpt$submitted_via)
+company_response_to_consumer_1 <- table(con_cmpt$company_response_to_consumer)
+timely_response_1 <- table(con_cmpt$timely_response)
+consumer_disputed_1 <- table(con_cmpt$consumer_disputed)
+
+#Fromatting product category values
+df <- con_cmpt
+df$product <- as.character(df$product)
+df$product[df$product == "Credit reporting"] <- "CreditCard"
+df$product[df$product == "Credit card"] <- "CreditCard"
+df$product[df$product == "Other financial service"] <- "Other"
+df$product[df$product == "Bank account or service"] <- "AccountService"
+df$product[df$product == "Money transfers"] <- "AccountService"
+df$product[df$product == "Debt collection"] <- "Debt"
+df$product[df$product == "Prepaid card"] <- "Other"
+df$product[df$product == "Consumer Loan"] <- "ConsumerLoan"
+df$product[df$product == "Payday loan"] <- "PaydayLoan"
+df$product[df$product == "Student loan"] <- "StudentLoan"
+
+product_1 <- table(df$product)
+product_1
+
+library("ggplot2")
+
+#Checking Outliers
+#detach("package:plyr", unload=TRUE) 
+library("dplyr")
+Severity <- con_cmpt %>% group_by(con_cmpt$Complaint.Year) %>% summarise(Freq = n()) %>% arrange(desc(Freq))
+Severity
+```
+## 4. EXPLORATORY DATA ANALYSIS
+### 4.1 Customer Segmentation
+        
+#####Company-wise analysis: 
+        From the below plot we can see that Bank of America has highest number of complaints followed by Wells Fargo & Company, JPMorgan Chase & Co., Equifax and Experian. We can notice that first three banks are amoung the largest bank in USA but the other two are not among the top 20 largest banks list published by World Atlas or Wikipedia. Equifax and Experian are both credit related companies. It is quite surprising to see that Goldman Sachs which is among the top 10 banks in USA has only 29 complaints. According to current dataset its rank is close to 700 out of 3600.
+
+Also the cumulative percentage of complaints count is approximate 35% from first five banks and 53% from first 10 banks.
+
+        
+```{r }
+#detach("package:plyr", unload=TRUE) 
+library("dplyr")
+companywise = con_cmpt %>% group_by(con_cmpt$company) %>%  summarise(n = n()) %>% arrange(desc(n))%>% top_n(10)
+companywise$CompanyName <- companywise$`con_cmpt$company`
+companywise$ComplaintCount <- companywise$n
+attach(companywise)
+companywise$CompanyName <- with(companywise, reorder(companywise$CompanyName, -companywise$ComplaintCount))
+companywise
+Com_Max<-ggplot(data=companywise, aes(x=CompanyName, y=ComplaintCount),xlab="Company Name") +
+  geom_bar(stat="identity", width=0.5,color="blue", fill="blue")+
+  geom_text(aes(label=ComplaintCount), vjust=-0.3, size=3.5)+
+  theme(axis.text.x=element_text(angle=90,hjust=1,vjust=0.5))+
+      ggtitle("Distribution of complaints among top 10 companies")
+
+
+#Distribution of compaints across the states
+
+statewise = con_cmpt %>% group_by(con_cmpt$state) %>%  summarise(n = n()) %>% arrange(desc(n))%>%top_n(10)
+statewise$StateName <- statewise$`con_cmpt$state`
+statewise$ComplaintCount <- statewise$n
+statewise$StateName <- with(statewise, reorder(statewise$StateName, -statewise$ComplaintCount))
+#ead(statewise)
+attach(statewise)
+
+State_Max<-ggplot(data=statewise, aes(x=StateName, y=ComplaintCount),xlab="State Name") +
+  geom_bar(stat="identity", width=0.5,color="blue", fill="blue")+
+  geom_text(aes(label=ComplaintCount), vjust=-0.3, size=3.5)+
+  theme(axis.text.x=element_text(angle=90,hjust=1,vjust=0.5))+
+      ggtitle("Distribution of complaints among top 10 states")
+
+Complaint_Mode <-  ggplot(con_cmpt, aes(reorder(submitted_via, -table(con_cmpt$submitted_via)[submitted_via]), fill = submitted_via)) + geom_bar() + xlab("Mode of Complaints Submission") + ylab("Number of Complaints") + scale_y_continuous(breaks = seq(0,350000,50000)) + theme(axis.text.x = element_text(angle = 50, size = 12, vjust = 0.4, face = "bold"), plot.title = element_text(size = 12, face = "bold", vjust = 2),axis.title.x = element_text(face = "bold", size = 12, vjust = -0.35),axis.title.y = element_text(face = "bold", vjust = 0.35, size = 12)) + theme(legend.position = "none")+
+      ggtitle("Distribution of complaints among channel")
+
+```
+
+```{r}
+Com_Max
+```
+
+#####State-wise analysis: 
+      From the below plot on statewise distribution we can see that CA-California has highest number complaints followed by FL-Florida, TX-Texas, NY-NewYork and GA-Georgia. These are also among the highly populated states in USA, so probably this can be biased to conclude on an average that these states received maximum number of complaints.
+```{r}
+State_Max
+```
+
+#####Mode of complaints: 
+From the below plot we can see that customer prefer to file complaints by web based channel more than referral, post mails or phone calls. Probably it gives them more structured approach to file the complaint and captures their details in better and faster manner. It is also a cost and time effective solution. Phone and Postal mail share quite the similar percentage of distribution but email communication is the least preferred mode. 
+
+```{r}
+Complaint_Mode
+```
+
+#### CORRELATION BETWEEN VALUES - Understanding some parameters with the top 5 banks 
+
+```{r warning=FALSE}
+
+con_cmpt_comp5 <- con_cmpt[con_cmpt$company %in% c("Bank of America","Wells Fargo & Company","JPMorgan Chase & Co.","Equifax","Experian"),]
+
+
+comp_channel <- ggplot(con_cmpt_comp5, aes(reorder(company, table(con_cmpt_comp5$company)[company]),fill = submitted_via )) + geom_bar() + xlab("Company Names") + ylab("Distribution of complaints with submission channel") + coord_flip()+
+      ggtitle("Interaction between companies and submission channel")
+
+comp_disputed <- ggplot(con_cmpt_comp5, aes(reorder(company, table(con_cmpt_comp5$company)[company]), fill = consumer_disputed )) + geom_bar(position = "dodge") + ggtitle("Companies with most complaints against Consumer_disputed") + ylab("Number of Complaints") + xlab("Companies") + theme(axis.text.x=element_text(angle=90,hjust=1,vjust=0.5)) +
+      ggtitle("Interaction between companies and disputed compliants")
+
+comp_response <- ggplot(con_cmpt_comp5, aes(reorder(company, table(con_cmpt_comp5$company)[company]), fill = timely_response )) + geom_bar(position = "dodge") + ggtitle("Companies with most complaints against timely response") + ylab("Number of Complaints") + xlab("Companies") + theme(axis.text.x=element_text(angle=90,hjust=1,vjust=0.5)) +
+      ggtitle("Interaction between companies and timely response")
+
+comp_product <- ggplot(con_cmpt_comp5, aes(reorder(con_cmpt_comp5$company, table(con_cmpt_comp5$company)[company]),fill = product )) + geom_bar() + xlab("Company Names") + ylab("Distribution of complaints product wise") + coord_flip()+
+      ggtitle("Interaction between companies and products")
+
+con_cmpt_comp6 <- con_cmpt_comp5[con_cmpt_comp5$state %in% c("CA","FL","TX","NY","GA"),]
+
+comp_state <- ggplot(con_cmpt_comp6, aes(reorder(con_cmpt_comp6$company, table(con_cmpt_comp6$company)[company]),fill = state )) + geom_bar() + xlab("Company Names") + ylab("Distribution of complaints across different states") + coord_flip()+
+      ggtitle("Interaction between companies and states")
+
+```
+
+From the below plots we can see that web is the most preferred mode of channel for credit related complaints, rest all channels are least preferred. But for financial products Web and Referral are preferred channels and somewhat Phone communications too.
+```{r}
+comp_channel
+```
+```{r}
+comp_disputed
+```
+
+The number of disputed customers is quite distributed with the size of the banks. Disputed is really an important factor to analyze. Many a times, even if the customers are not satisfied with the responses they received from the bank, still they do not go for any legal action. But from the above plot we can see that are substantial amount of customer who have undergone a dispute with the bank. Overall there are almost 20% customers who have disputed which is quite a substantial amount. Bank of America faces the most legal action by the customers in terms of disputes.
+```{r}
+comp_response
+```
+
+For almost 97% of the times financial firms have tried to provide timely response to its customers which is a good factor. We can see only small red bar corresponding to Bank of America and Wells Fargo. For most banks the response to customer is timely. 
+
+```{r}
+comp_state
+```
+
+We can observe that Texas has highest number of complaints with credit related products. A large volume of complaints came to Bank of America from California and Florida states. Bank of America might investigate these two geographies to analyze further. Also, Texas data can be further analyzed for more credit related complaints.
+
+```{r}
+comp_product
+```
+
+From the above plot it is quite evident that Equifax and Experian are credit related firms as all they receive is credit related complaints. Where the banks like Bank of America and Wells Fargo receive mostly Mortgage related complaints. Mortgage actually accounts for 33% of the complaints. We can also see a substantial amount of complaints with respect to Bank accounts or services for the financial firms above.
+
+### 4.2 Product Segmentation
+
+```{r warning=FALSE}
+productwise = con_cmpt %>% group_by(con_cmpt$product) %>%  summarise(n = n()) %>% arrange(desc(n))%>%top_n(10)
+productwise$Products <- productwise$`con_cmpt$product`
+Product_Max<-ggplot(data=productwise, aes(x=Products, y=ComplaintCount),xlab="Product Name") +
+  geom_bar(stat="identity", width=0.5,color="blue", fill="blue")+
+  geom_text(aes(label=ComplaintCount), vjust=-0.3, size=3.5)+
+  theme(axis.text.x=element_text(angle=90,hjust=1,vjust=0.5))+
+      ggtitle("Distribution of complaint amoung products")
+```
+
+```{r}
+Product_Max
+```
+
+From the above plot we can see that Mortgage share the maximum number of complaints followed by complaints related to Debt collection, Credit cards and Credit reporting. All these financial products are very important for the banks to attract customers, but these are also the most risky services provided by the banks. These can lead to bankruptcy of the financial institution. As the risk involved is high, it is a bigger challenge for the banks to collect money from defaulted customers. And the mode bank takes will in most cases led to complaints from the customers.
+We will analyze the issues faced by the customer while exploring the complaints data for specific products.
+
+
+```{r warning=FALSE}
+#con_cmpt <- read.csv("consumer_complaints.csv")
+library(tm)
+library(SnowballC)
+library(wordcloud)
+require(RColorBrewer)
+
+con_cmpt$product_cat <- con_cmpt$product
+
+pd <- con_cmpt[con_cmpt$product_cat %in% c("Payday loan", "Mortgage"),]
+
+pd_narrative <- pd[pd$product_cat=="Payday loan",]$consumer_complaint_narrative
+
+
+pd.corpus <- Corpus(VectorSource(pd_narrative))
+pd.corpus <- tm_map(pd.corpus, removePunctuation)
+pd.corpus <- tm_map(pd.corpus, removeNumbers)
+pd.corpus <- tm_map(pd.corpus, content_transformer(tolower))
+pd.corpus <- tm_map(pd.corpus, removeWords, stopwords("english"))
+pd.corpus <- tm_map(pd.corpus, stripWhitespace)
+
+
+pd.corpus <- tm_map(pd.corpus, function(x) removeWords(x, c("xxxx", "xxxxxxxx")))
+
+pd.tdm <- TermDocumentMatrix(pd.corpus)
+pd.tdm <- removeSparseTerms(pd.tdm, 0.99)
+pd.m <- as.matrix(pd.tdm)
+pd.v <- sort(rowSums(pd.m),decreasing=TRUE)
+pd.d <- data.frame(word = names(pd.v),freq=pd.v)
+
+pal2 <- brewer.pal(8,"Dark2")
+
+```
+
+```{r }
+PaydayLoans_Issues <- wordcloud(pd.d$word,pd.d$freq, scale=c(4,.2),min.freq=50,
+          max.words=Inf, random.order=FALSE, rot.per=.15,colors=pal2)
+```
+###### WORD CLOUD OF PAYDAY LOAN COMPLAINTS
+This is the word cloud for the Payday Load product related complaint text, most common issue faced by the consumers in this category is unnecessary charges filed by the bank to the customers. Therefore, from the word cloud we can see words like pay, now, owe, never, asked etcetera.
+
+```{r warning=FALSE}
+## Prominent issues with Mortgage loans
+pd_narrative <- pd[pd$product_cat=="Mortgage",]$consumer_complaint_narrative
+pd.corpus <- Corpus(VectorSource(pd_narrative))
+pd.corpus <- tm_map(pd.corpus, removePunctuation)
+pd.corpus <- tm_map(pd.corpus, removeNumbers)
+pd.corpus <- tm_map(pd.corpus, content_transformer(tolower))
+pd.corpus <- tm_map(pd.corpus, removeWords, stopwords("english"))
+pd.corpus <- tm_map(pd.corpus, stripWhitespace)
+
+pd.corpus <- tm_map(pd.corpus, function(x) removeWords(x, c("xxxx", "xxxxxxxx")))
+
+pd.tdm <- TermDocumentMatrix(pd.corpus)
+pd.tdm <- removeSparseTerms(pd.tdm, 0.99)
+pd.m <- as.matrix(pd.tdm)
+pd.v <- sort(rowSums(pd.m),decreasing=TRUE)
+pd.d <- data.frame(word = names(pd.v),freq=pd.v)
+pal2 <- brewer.pal(8,"Dark2")
+
+```
+
+```{r}
+Mortgage_Issues <- wordcloud(pd.d$word,pd.d$freq, scale=c(4,.2),min.freq=50,
+          max.words=Inf, random.order=FALSE, rot.per=.15,colors=pal2)
+```
+
+###### WORD CLOUD OF MORTGAGE LOAN COMPLAINTS
+
+As we know that most of the mortgage issue are due to loans taken by the customers and kept their properties as security; and the above word cloud evident that too, we can see the words like loan, home, payments. 
+
+```{r warning=FALSE}
+
+df_debt <- con_cmpt
+
+df_debt <- con_cmpt[con_cmpt$product %in% c("Debt collection"),]
+attach(df_debt)
+Debt_Issues <- ggplot(df_debt, aes(reorder(issue, -table(df_debt$issue)[issue]), fill = issue)) + geom_bar() + xlab("Issue logged by customer") + ylab("Number of Complaints") + scale_y_continuous(breaks = seq(0,350000,50000)) + theme(axis.text.x = element_text(angle = 50, size = 10, vjust = 0.4, face = "bold"), plot.title = element_text(size = 20, face = "bold", vjust = 2),axis.title.x = element_text(face = "bold", size = 15, vjust = -0.35),axis.title.y = element_text(face = "bold", vjust = 0.35, size = 15)) + theme(legend.position = "none")+
+      ggtitle("Distribution of DEBT product with ISSUES")
+
+```
+
+```{r}
+Debt_Issues
+```
+
+
+The bar graph seems to suggest that most of the complaints are with regard to companies continuously forcing customers to pay off debts they don't even owe.
+
+
+### 4.3 Seasonality Segmentation
+
+By evaluating the time taken to send the complaint to company we can draw some good insights. It is very surprising that it took more than 100 days for 3K complaints to be sent to companies. There is also some possibility of data entry issues where the days took is in negative. Date received is after the date sent which can be a data entry issue. One complaint took 900 days to be sent to company. 
+
+From the month data analysis, we can see that first three months (Quarter-1) of the year have the most complaints. Complaints are increasing over the years where 2015 being the worst year. It would have been interesting to see how many end up in 2016 because the number of complaints shows a positive trend over the years probably because more and more people are getting desired responses or becoming aware of this platform. The data looks incomplete for 2016.
+
+On further analysis, it is observed that the data is actually spiked by the 2016-year data. For 2013,2014 and 2015 the data is quite evenly distributed across quarters.
+
+
+
+```{r warning=FALSE}
+Monthwise <- ggplot(con_cmpt, aes(Complaint.Month, fill = Complaint.Month)) + geom_bar() + theme(plot.title = element_text(size = 20, face = "bold", vjust = 2),axis.title.x = element_text(face = "bold", size = 15, vjust = -0.35),axis.title.y = element_text(face = "bold", vjust = 0.35, size = 15)) + theme(legend.position = "none")+
+      ggtitle("Distribution of complaint Month-wise")
+
+Yearwise <- ggplot(con_cmpt, aes(Complaint.Year, fill = Complaint.Year)) + geom_bar() + theme(plot.title = element_text(size = 20, face = "bold", vjust = 2),axis.title.x = element_text(face = "bold", size = 15, vjust = -0.35),axis.title.y = element_text(face = "bold", vjust = 0.35, size = 15)) + theme(legend.position = "none")+
+      ggtitle("Distribution of complaint Year-wise")
+
+Weekdaywise <- ggplot(con_cmpt, aes(Complaint.Weekday, fill = Complaint.Weekday)) + geom_bar() + scale_y_continuous(breaks = seq(0,350000,50000)) + theme(axis.text.x = element_text(angle = 50, size = 10, vjust = 0.4, face = "bold"), plot.title = element_text(size = 20, face = "bold", vjust = 2),axis.title.x = element_text(face = "bold", size = 15, vjust = -0.35),axis.title.y = element_text(face = "bold", vjust = 0.35, size = 15)) + theme(legend.position = "none")+
+      ggtitle("Distribution of complaint Weekday-wise")
+
+con_cmpt$Days_to_send_to_company <- difftime(con_cmpt$date_sent_to_company, con_cmpt$date_received , units = c("days"))
+
+con_cmpt$Days_to_send_to_company <- as.numeric(con_cmpt$Days_to_send_to_company)
+
+summary(con_cmpt$Days_to_send_to_company)
+
+dim(con_cmpt[con_cmpt$Days_to_send_to_company > 100, ])
+
+dim(con_cmpt[con_cmpt$Days_to_send_to_company > 500, ])
+
+dim(con_cmpt[con_cmpt$Days_to_send_to_company > 900, ])
+
+```
+
+```{r}
+
+Monthwise
+
+```
+
+```{r}
+
+Yearwise
+
+```
+
+
+```{r }
+Weekdaywise
+```
+
+### MACHINE LEARNING MODEL to categorize the customer into disputed and non-disputed categories.
+
+I have prepared two models; one with features derived from text in issue column and another with features available in the dataset.
+
+##### MODEL#1. Building a model to categorize data in disputed and non-disputed customer complaints. For this model building I have used the text data present in issue column and generated features from the words used by the customers to describe the issue.
+
+Steps involved:
+a)	Prepared a corpus of words from issue text.
+b)	Edited the corpus by removing special character along with keeping the word from merging intact.
+c)	Removed punctuations
+d)	Converted the data to lower case
+e)	Removed stopwords
+f)	Created a document termed matix
+g)	One important challenge faced is the correlation between feature extracted. To overcome this issue I have created a correlation matrix for the words and dropped the unnecessary feature which had correlation more than 75%. This has actually helped to bring down the model features from 166 to 81. 
+h)	The correlation was so high that most of the models were failing to classify the data.
+
+##### LOGISTIC REGRESSION:
+
+For preparing the model, I have used Logistic Regression binary classification model. It helps us in understanding the log of odds of the dependent variable in terms of linear combination of the independent variables.
+
+From the summary statistics, it is evident that out of 81 features used only 26 are statistically significant and have p-value less than 0.05. 
+
+On re-running the model with significant variables, we can see that there is no change in the efficiency of the model in both the cases it was 83.61%, but the computation and resource utilization of the model is decreased. 
+Also, there is a drop in the AIC value from 45039.28 to 45013.02, AIC ( stands for Akaike Information Criteria ) like adjusted R-squared penalizes for extra features in the dataset. Lower the value of AIC better is the model.
+
+```{r warning=FALSE}
+libs <- c("tm","plyr","class", "dplyr")
+lapply(libs, require, character.only=TRUE)
+
+options(stringsAsFactors = FALSE)
+
+disputed <- c("Yes","No")
+
+# Cleaning data
+#Creating 2 subset of data one for disputed customer and another for non disputed
+complaintData <- subset(con_cmpt, con_cmpt$Complaint.Year == 2016)
+
+#Drop the records with null values
+complaintData <- complaintData[!(is.na(complaintData$consumer_disputed) | complaintData$consumer_disputed==""), ]
+complaintData <- complaintData[!(is.na(complaintData$issue) | complaintData$issue==""), ]
+
+#head(complaintData)
+cust_dis = subset(complaintData, complaintData$consumer_disputed == "Yes")
+cust_notdis = subset(complaintData, complaintData$consumer_disputed == "No")
+
+#Creating seperate corpus for two categories of disputed customer
+dis_Corpus = Corpus(VectorSource(cust_dis$issue))
+#str(dis_Corpus)
+nadis_Corpus = Corpus(VectorSource(cust_notdis$issue))
+
+cleanCorpus <- function(corpus)
+{
+  toSpace <- content_transformer(function(x, pattern){return(    gsub(pattern, " ",x))})
+  corpus <- tm_map(corpus, toSpace, "-")
+  corpus <- tm_map(corpus, toSpace, ":")
+  corpus <- tm_map(corpus, toSpace, "'")
+  corpus <- tm_map(corpus, toSpace, "/")
+  corpus <- tm_map(corpus, toSpace, " -")
+  corpus <- tm_map(corpus, toSpace, " ,")
+  corpus <- tm_map(corpus, toSpace, ",")
+  
+  corpus.tmp <- tm_map(corpus, removePunctuation)
+  corpus.tmp <- tm_map(corpus.tmp, tolower)
+  corpus.tmp <- tm_map(corpus.tmp, removeWords, stopwords("english"))
+  return(corpus.tmp)
+}
+
+# Building term document matrix
+s.dis <- cleanCorpus(dis_Corpus)
+s.ndis <- cleanCorpus(nadis_Corpus)
+#str(s.ndis)
+#Creating term document matrix
+s.tdm.dis <- DocumentTermMatrix(s.dis)
+#str(s.tdm.dis)
+s.tdm.ndis <- DocumentTermMatrix(s.ndis)
+#str(s.tdm.ndis)
+
+# attach the output variable 
+s.dis.mat <- as.matrix(s.tdm.dis)
+s.ndis.mat <- as.matrix(s.tdm.ndis)
+
+s.dis.df <- as.data.frame(s.dis.mat)
+Cust_D <- rep("Yes", nrow(s.dis.df)) 
+s.dis.df <- cbind(s.dis.df,Cust_D )
+
+s.ndis.df <- as.data.frame(s.ndis.mat)
+Cust_D <- rep("No", nrow(s.ndis.df)) 
+s.ndis.df <- cbind(s.ndis.df,Cust_D )
+#s.ndis.df
+
+# Stack the matrix
+library(dplyr)
+tdm.stack <- bind_rows(s.dis.df, s.ndis.df)
+#Cust_D <- bind_rows(Cust_D_dis, Cust_D_ndis)
+tdm.stack[is.na(tdm.stack)] <- 0
+head(tdm.stack)
+
+#To determine column datatype
+#sapply(tdm.stack, class)
+
+df1 <- tdm.stack
+df1$Cust_D <- NULL
+#sapply(df1, class)
+df2 = cor(df1)
+library("caret")
+library("pROC")
+hc = findCorrelation(df2, cutoff=0.75) # putt any value as a "cutoff" 
+hc = sort(hc)
+reduced_Data = df1[,-c(hc)]
+
+df_issue <- cbind(reduced_Data,tdm.stack$Cust_D )
+
+#head(df_issue)
+df_issue$Cust_D <- df_issue$`tdm.stack$Cust_D`
+df_issue$`tdm.stack$Cust_D`<-NULL
+df_issue$Cust_D <- as.factor(df_issue$Cust_D)
+
+logit_1 <- glm(Cust_D~., family = binomial,data = df_issue, maxit = 1000)
+```
+
+```{r results='hide'}
+summary(logit_1)
+```
+
+```{r}
+#model 2 with important variable from logit_1
+logit_2 <- glm(Cust_D~ arbitration+information+reporting+verification+settlement+tactics+threatening+sharing+cancelling+statements+score+underwriting+rewards+disputes+originator+servicer+use+increase+getting+marketing+acct+monitoring+check, family = binomial,data = df_issue, maxit = 1000)
+
+```
+
+```{r results='hide'}
+summary(logit_2)
+```
+
+```{r}
+df_issue$Predict1 <- ifelse(logit_1$fitted.values >0.5,"Yes","No")
+df_issue$Predict2 <- ifelse(logit_2$fitted.values >0.5,"Yes","No")
+mytable1 <- table(df_issue$Cust_D,df_issue$Predict1)
+mytable2 <- table(df_issue$Cust_D,df_issue$Predict2)
+
+
+```
+
+```{r}
+efficiency1<- sum(diag(mytable1))/sum(mytable1)
+efficiency1
+```
+
+```{r}
+efficiency2<- sum(diag(mytable2))/sum(mytable2)
+efficiency2
+```
+
+##### Analysis of the outcome
+
+From Confusion Matrix, the accuracy or efficiency of our model is 83.61%.
+
+```{r}
+ROC_CURVE2 <- roc(Cust_D~logit_2$fitted.values, data = df_issue, plot = TRUE, main = "ROC CURVE", col= "blue")
+```
+
+ROC stands for Receiver Operating Characteristic. It explains the model's performance by evaluating Sensitivity vs Specificity.
+
+The area under the ROC Curve is an index of accuracy. Higher the area under the curve, better the prediction power of the model.
+
+```{r}
+auc(Cust_D~logit_1$fitted.values, data = df_issue)
+```
+
+```{r}
+logit_1$aic
+logit_2$aic
+```
+
+
+```{r}
+auc(Cust_D~logit_2$fitted.values, data = df_issue)
+```
+
+AUC of a perfect predictive model equals 1, whereas in our case the area under the curve of model is 0.5613.
+
+##### MODEL#2. Building a model to categorize data in disputed and non-disputed customer complaints. For this model building I have used the categorical features available and generated dummy variables.
+
+##### Hypothesis Testing:
+Null Hypothesis: Coefficient of all independent features is 0
+Alternate Hypothesis: Beta coefficient of atleast one independent variable is not zero.
+
+From the below model, we can observe that as the p-value for some coefficient is less than 0.05. Therefore, their coefficients are significant. Hence we can reject the null hypothesis and conclude that some variables help explain the variation in the target variable.
+
+```{r warning=FALSE}
+#Fromatting product category values
+df <- con_cmpt
+df <- subset(df, df$company == "Bank of America")
+
+vars_obs <- c("product", #2
+              "state", #5
+              "submitted_via",
+              "company_response_to_consumer",
+              "timely_response",
+              "consumer_disputed"
+)
+df <- df[vars_obs]
+
+df$product <- as.character(df$product)
+df$product[df$product == "Credit reporting"] <- "CreditCard"
+df$product[df$product == "Credit card"] <- "CreditCard"
+df$product[df$product == "Other financial service"] <- "Other"
+df$product[df$product == "Bank account or service"] <- "AccountService"
+df$product[df$product == "Money transfers"] <- "AccountService"
+df$product[df$product == "Debt collection"] <- "Debt"
+df$product[df$product == "Prepaid card"] <- "Other"
+df$product[df$product == "Consumer Loan"] <- "ConsumerLoan"
+df$product[df$product == "Payday loan"] <- "PaydayLoan"
+df$product[df$product == "Student loan"] <- "StudentLoan"
+
+df$product <- as.factor(df$product)
+df$state <- as.factor(df$state)
+df$submitted_via <- as.factor(df$submitted_via)
+df$company_response_to_consumer <- as.factor(df$company_response_to_consumer)
+df$timely_response <- as.factor(df$timely_response)
+df$consumer_disputed <- as.factor(df$consumer_disputed)
+
+
+df <- df[complete.cases(df), ]
+
+set.seed(40)
+issue.df <- df
+#head(df)
+issue.df <- issue.df[issue.df$state %in% c("CA","FL","TX","NY","GA"),]
+
+#Randomize data
+rand <- runif(nrow(issue.df)) 
+issue.df.rand <- issue.df[order(rand), ]
+
+#Partition data
+issue.train.df <- issue.df.rand[1:18361, ]
+issue.test.df <- issue.df.rand[18362:26231, ]
+#head(issue.train.df)
+#Examining the distribution of target variable
+table(issue.test.df$consumer_disputed)
+table(issue.train.df$consumer_disputed)
+
+issue.train.df$consumer_disputed <- as.factor(issue.train.df$consumer_disputed)
+#logit_1 <- glm(Cust_D~., family = binomial,data = df_issue, maxit = 1000)
+#summary(logit_1)
+#ifelse(n <- sapply(m, function(x) length(levels(x))) == 1, "DROP", "NODROP")
+w <- 1:length(issue.train.df$consumer_disputed)
+issuelogit <- glm(consumer_disputed~., family = binomial,data = issue.train.df, maxit = 1000, weights = w)
+
+```
+
+```{r echo=FALSE, results='hide',message=FALSE}
+summary(issuelogit)
+
+```
+
+From Confusion Matrix, the accuracy of our model is 77.71%.
+
+```{r}
+par(mfrow=c(2,2))
+#plot(issuelogit)
+
+#confint.default(issuelogit) #Build confidence intervals
+#exp(coef(issuelogit)) #Calculate odds ratio
+
+#Calculate Chi-Square
+devdiff <- with(issuelogit, null.deviance - deviance) #difference in deviance between null and this model
+dofdiff <- with(issuelogit, df.null - df.residual) #difference in degrees of freedom between null and this model
+pval <- pchisq(devdiff, dofdiff, lower.tail = FALSE )
+paste("Chi-Square: ", devdiff, " df: ", dofdiff, " p-value: ", pval)
+
+
+#Evaluate model performance
+#Convert probability in to a 0 or 1 prediction by rounding (cutoff = 0.5)
+issue.train.df$probsurv <- predict(issuelogit, newdata = issue.train.df, type = "response")
+issue.train.df$logitpred <- round(issue.train.df$probsurv)
+#head(issue.train.df)
+
+table(issue.train.df$logitpred)
+table(issue.test.df$consumer_disputed)
+
+issue.test.df$probsurv <- predict(issuelogit, newdata = issue.test.df, type = "response")
+issue.test.df$logitpred <- round(issue.test.df$probsurv)
+
+### Test Model Performance - Creates a 2X2 confusion matrix and associated metrics
+testModelPerformance <- function(model, dataset, target, prediction) {
+  if(missing(prediction))
+  {
+    print("here")
+    dataset$pred <- predict(model, dataset, type = "class")
+  }
+  else
+  {
+    print("here2")
+    dataset$pred <- prediction
+  }
+  
+  writeLines("PERFORMANCE EVALUATION FOR")
+  writeLines(paste("Model:", deparse(substitute(model))))
+  writeLines(paste("Target:", deparse(substitute(target))))
+  
+  writeLines("\n\nConfusion Matrix:")
+  confMatrix <- table(Actual = target, Predicted = dataset$pred)
+  truePos <- confMatrix[2,2]
+  falseNeg <- confMatrix[2,1]
+  falsePos <- confMatrix[1,2]
+  trueNeg <- confMatrix[1,1]
+  print(confMatrix)
+  writeLines("\n\n")
+  
+  accuracy <- (truePos + trueNeg)/(truePos + falseNeg + falsePos + trueNeg)
+  sensitivity <- truePos/(truePos + falseNeg)
+  specificity <- trueNeg/(falsePos + trueNeg)
+  falsePosRate <- falsePos/(falsePos + trueNeg)
+  falseNegRate <- falseNeg/(truePos + falseNeg)
+  precision <- truePos/(truePos + falsePos)
+  
+  writeLines(paste("Accuracy:", round(accuracy, digits = 4)))
+  writeLines(paste("Sensitivity:", round(sensitivity, digits = 4)))
+  writeLines(paste("Specificity:", round(specificity, digits = 4)))
+  writeLines(paste("False Positive Rate:", round(falsePosRate, digits = 4)))
+  writeLines(paste("False Negative Rate:", round(falseNegRate, digits = 4)))
+  writeLines(paste("Precision:", round(precision, digits = 4)))
+  
+  dataset
+}
+
+issue.train.df <- testModelPerformance(issuelogit, issue.train.df, issue.train.df$consumer_disputed, issue.train.df$logitpred)
+issue.test.df <- testModelPerformance(issuelogit, issue.test.df, issue.test.df$consumer_disputed, issue.test.df$logitpred)
+
+```
+
+ROC stands for Receiver Operating Characteristic. It explains the model's performance by evaluating Sensitivity vs Specificity.
+
+The area under the ROC Curve is an index of accuracy. Higher the area under the curve, better the prediction power of the model.
+
+```{r warning=FALSE}
+library("pROC")
+ROC_CURVE2 <- roc(consumer_disputed~issuelogit$fitted.values, data = issue.train.df, plot = TRUE, main = "ROC CURVE", col= "blue")
+
+```
+
+AUC of a perfect predictive model equals 1, whereas in our case the area under the curve of model is 0.561.
+
+```{r echo=FALSE, results='hide',message=FALSE}
+auc(consumer_disputed~issuelogit$fitted.values, data = issue.train.df)
+```
+
+
+## 6. EXECUTIVE SUMMARY
+Analysing complaint data is of prime importance these days. With the growing advancement in e-commerce platforms, customer communicate more effectively about their feedback regarding products and services; analysis and awareness about which, has become very critical for industries in all segments. Also with the increasing competitions among companies, as we can witness in the current dataset itself, that customer have an option to choose from 3k financial firms for their services, customer retention has become quite challenging.
+
+This data set can really help financial firms to take necessary preventive and corrective actions for betterment of their products and services; by focussing directly on challenges faced by their customers as a feedback mechanism.
+Understanding the financial products, their demographics, issues and detailed customer complaints related with them can help all the 3 parties: customers, government bodies and financial institutions work together cordially. Though the model accuracy is low due to unbalanced dataset.
+
+From the above machine learning model, we can see the potential in text data analytics which helps to better classify the complaints as compared to huge categorical data. Knowing and analysing the nitty-gritty of customer complaints can help to bring excellent insights regarding products then just the readily available categorical data.
+
